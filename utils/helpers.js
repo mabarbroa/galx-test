@@ -137,9 +137,8 @@ ${monitoredSpaces.length > 0 ?
         
         // Escape special markdown characters
         return text
-            .replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\## 3. Kode Bot Telegram
-
-### A. File .env')
+        .replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&')
+        
             .replace(/\n/g, '\n');
     }
 
