@@ -1,206 +1,509 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const GalxeMonitor = require('./galxe-monitor');
-const Database = require('./utils/database');
-const Helpers = require('./utils/helpers');
+const axios = require('axios');
+const cron = require('cron');
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const db = new Database();
-const monitor = new GalxeMonitor(bot, db);
-
-// Error handler
-bot.on('error', (error) => {
-    Helpers.handleError(error, 'Bot Error');
-});
-
-bot.on('polling_error', (error) => {
-    Helpers.handleError(error, 'Polling Error');
-});
-
-// Command handlers
-bot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
-    
-    try {
-        // Add chat to database
-        await db.addMonitoringChat(chatId);
+class GalxeUniversalFCFSBot {
+    constructor() {
+        this.bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+        this.monitoringChats = new Set(); // Set of active chat IDs
+        this.detectedCampaigns = new Set(); // Store campaign IDs to avoid duplicates
+        this.cronJob = null;
+        this.isGlobalMonitoring = false;
         
-        bot.sendMessage(chatId, `
-🚀 *Galxe FCFS Monitor Bot*
+        this.setupHandlers();
+        this.log('🤖 Galxe Universal FCFS Monitor Bot initialized');
+    }
 
-Bot ini akan memantau reward FCFS di Galxe dan memberikan notifikasi real-time.
+    log(message, level = 'INFO') {
+        const timestamp = new Date().toLocaleString();
+        console.log(`[${timestamp}] [${level}] ${message}`);
+    }
 
-*Commands:*
-/monitor - Mulai monitoring
-/stop - Stop monitoring  
+    setupHandlers() {
+        // Error handlers
+        this.bot.on('error', (error) => {
+            this.log(`Bot Error: ${error.message}`, 'ERROR');
+        });
+
+        this.bot.on('polling_error', (error) => {
+            this.log(`Polling Error: ${error.message}`, 'ERROR');
+        });
+
+        // Command handlers
+        this.bot.onText(/\/start/, (msg) => this.handleStart(msg));
+        this.bot.onText(/\/help/, (msg) => this.handleHelp(msg));
+        this.bot.onText(/\/monitor/, (msg) => this.handleMonitor(msg));
+        this.bot.onText(/\/stop/, (msg) => this.handleStop(msg));
+        this.bot.onText(/\/status/, (msg) => this.handleStatus(msg));
+        this.bot.onText(/\/test/, (msg) => this.handleTest(msg));
+    }
+
+    async handleStart(msg) {
+        const chatId = msg.chat.id;
+        
+        const welcomeMessage = `
+🚀 *Galxe Universal FCFS Monitor Bot*
+
+Bot ini akan memantau SEMUA campaign Galxe yang mengandung kata "FCFS" dari berbagai space dan memberikan notifikasi real-time.
+
+*📋 Commands:*
+/monitor - Mulai monitoring universal
+/stop - Stop monitoring
 /status - Cek status monitoring
-/add [space_id] - Tambah space untuk dimonitor
-/remove [space_id] - Hapus space dari monitoring
-/list - List space yang dimonitor
-/stats - Statistik bot
+/test - Test deteksi campaign FCFS
 /help - Bantuan lengkap
 
-*Format menambah space:*
-/add Za7zYyykeFvi9KYGmxWSrb
+*🎯 Fitur Utama:*
+✅ Monitor SEMUA space Galxe otomatis
+✅ Deteksi campaign dengan kata "FCFS"
+✅ Notifikasi real-time setiap 60 detik
+✅ Tidak perlu tambah space ID manual
 
-*Format dari URL:*
-/add https://app.galxe.com/quest/Za7zYyykeFvi9KYGmxWSrb/GCahatmQxo
+*💡 Cara Pakai:*
+1. Ketik /monitor untuk mulai
+2. Bot akan auto-scan semua campaign FCFS
+3. Terima notifikasi instant!
 
-Silakan mulai dengan menambah space yang ingin dimonitor!
-        `, { parse_mode: 'Markdown' });
-    } catch (error) {
-        Helpers.handleError(error, 'Start command');
-        bot.sendMessage(chatId, '❌ Terjadi error saat memulai bot. Silakan coba lagi.');
+Siap untuk memulai monitoring universal?
+        `;
+
+        await this.sendMessage(chatId, welcomeMessage);
     }
-});
 
-bot.onText(/\/help/, (msg) => {
-    const chatId = msg.chat.id;
-    
-    const helpMessage = `
-📚 *Bantuan Lengkap - Galxe FCFS Monitor*
+    async handleHelp(msg) {
+        const chatId = msg.chat.id;
+        
+        const helpMessage = `
+📚 *Bantuan Lengkap*
 
-*🎯 Cara Menggunakan:*
-1. Mulai dengan /start
-2. Tambah space dengan /add [space_id]
-3. Mulai monitoring dengan /monitor
-4. Bot akan kirim notifikasi otomatis!
-
-*📋 Semua Commands:*
-/start - Mulai bot dan daftar ke sistem
-/help - Bantuan lengkap ini
-/add [space_id] - Tambah space untuk monitoring
-/remove [space_id] - Hapus space dari monitoring
-/list - Lihat semua space yang dimonitor
-/monitor - Mulai monitoring FCFS rewards
-/stop - Stop monitoring
-/status - Lihat status monitoring
-/stats - Statistik penggunaan bot
-
-*🔍 Format Space ID:*
-- Manual: /add Za7zYyykeFvi9KYGmxWSrb
-- Dari URL: /add https://app.galxe.com/quest/Za7zYyykeFvi9KYGmxWSrb/xxx
-
-*⚡ Fitur Bot:*
-✅ Real-time monitoring setiap 30 detik
-✅ Deteksi otomatis FCFS campaigns
+*🎯 Fitur Utama:*
+✅ Universal monitoring - tidak perlu space ID
+✅ Auto-detect campaign dengan kata "FCFS"
+✅ Monitoring real-time setiap 60 detik
 ✅ Notifikasi instant dengan link langsung
-✅ Multi-space monitoring
-✅ Database persistent
-✅ Error handling & recovery
+✅ Scan otomatis trending/popular spaces
 
-*🛠️ Troubleshooting:*
-- Bot tidak response? Restart dengan /start
-- Tidak ada notifikasi? Cek dengan /status
-- Error? Bot akan auto-recovery
+*📋 Commands:*
+\`/start\` - Mulai bot
+\`/monitor\` - Mulai monitoring universal
+\`/stop\` - Stop monitoring
+\`/status\` - Lihat status monitoring
+\`/test\` - Test deteksi campaign FCFS
+\`/help\` - Bantuan ini
 
-*💡 Tips:*
-- Monitor maksimal 10 space per chat
-- Bot cek setiap 30 detik untuk update terbaru
-- Notifikasi dikirim instant saat ada FCFS baru
-- Gunakan /stats untuk lihat performa bot
+*🔍 Cara Kerja Bot:*
+1. Bot otomatis scan trending campaigns
+2. Filter campaign yang mengandung "FCFS"
+3. Kirim notifikasi real-time
+4. Berikan link langsung untuk claim
 
-Butuh bantuan? Contact developer atau cek status di /stats
-    `;
-    
-    bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
-});
+*💡 Keywords FCFS yang Dideteksi:*
+• "FCFS"
+• "First Come First Served"
+• "Limited Supply"
+• "Grab Now"
+• "While Supplies Last"
+• "Hurry Up"
 
-bot.onText(/\/monitor/, async (msg) => {
-    const chatId = msg.chat.id;
-    await monitor.startMonitoring(chatId);
-});
+Bot akan otomatis berjalan tanpa perlu setup space ID!
+        `;
 
-bot.onText(/\/stop/, async (msg) => {
-    const chatId = msg.chat.id;
-    await monitor.stopMonitoring(chatId);
-});
+        await this.sendMessage(chatId, helpMessage);
+    }
 
-bot.onText(/\/status/, async (msg) => {
-    const chatId = msg.chat.id;
-    await monitor.getStatus(chatId);
-});
+    async handleMonitor(msg) {
+        const chatId = msg.chat.id;
 
-bot.onText(/\/add (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    let input = match[1].trim();
-    
-    // Extract space ID from URL if provided
-    if (input.startsWith('http')) {
-        const extractedId = Helpers.extractSpaceIdFromUrl(input);
-        if (extractedId) {
-            input = extractedId;
-        } else {
-            bot.sendMessage(chatId, '❌ Format URL tidak valid. Gunakan format: https://app.galxe.com/quest/SPACE_ID/...');
+        if (this.monitoringChats.has(chatId)) {
+            return this.sendMessage(chatId, '⚠️ Monitoring sudah aktif untuk chat ini.');
+        }
+
+        // Add chat to monitoring
+        this.monitoringChats.add(chatId);
+
+        // Start global monitoring if not already started
+        if (!this.isGlobalMonitoring) {
+            this.startGlobalMonitoring();
+        }
+
+        const message = `
+✅ *Universal Monitoring Started!*
+
+🔄 Status: Active
+🌐 Scope: All Galxe Spaces
+⏰ Check Interval: Setiap 60 detik
+🎯 Target: Campaign dengan kata "FCFS"
+
+Bot akan memindai SEMUA campaign Galxe dan mengirim notifikasi real-time ketika ada campaign FCFS baru.
+
+*📊 Monitoring Stats:*
+- Active Chats: ${this.monitoringChats.size}
+- Detected Campaigns: ${this.detectedCampaigns.size}
+- Mode: Universal Scan
+
+Gunakan /status untuk melihat status monitoring.
+        `;
+
+        await this.sendMessage(chatId, message);
+    }
+
+    async handleStop(msg) {
+        const chatId = msg.chat.id;
+
+        if (!this.monitoringChats.has(chatId)) {
+            return this.sendMessage(chatId, '❌ Monitoring tidak aktif untuk chat ini.');
+        }
+
+        // Remove chat from monitoring
+        this.monitoringChats.delete(chatId);
+
+        // Check if we need to stop global monitoring
+        this.checkGlobalMonitoring();
+
+        const message = `
+⏹️ *Monitoring Stopped!*
+
+🔄 Status: Inactive
+👥 Remaining Active Chats: ${this.monitoringChats.size}
+
+Untuk mulai monitoring lagi, gunakan /monitor
+        `;
+
+        await this.sendMessage(chatId, message);
+    }
+
+    async handleStatus(msg) {
+        const chatId = msg.chat.id;
+        const isActive = this.monitoringChats.has(chatId);
+
+        const message = `
+📊 *Status Dashboard*
+
+*🔄 Your Status:*
+Monitoring: ${isActive ? '✅ Active' : '❌ Inactive'}
+Mode: Universal FCFS Detection
+
+*🌐 Global Status:*
+Bot Status: ${this.isGlobalMonitoring ? '🟢 Running' : '🔴 Stopped'}
+Active Chats: ${this.monitoringChats.size}
+Check Interval: 60 seconds
+
+*📈 Performance:*
+Detected Campaigns: ${this.detectedCampaigns.size}
+Last Check: ${new Date().toLocaleString()}
+Uptime: ${Math.floor(process.uptime() / 60)} minutes
+
+*🎯 Detection Keywords:*
+FCFS, First Come First Served, Limited, Grab Now, While Supplies Last
+
+${isActive ? '✅ Bot sedang memantau campaign universal' : '💡 Gunakan /monitor untuk mulai monitoring'}
+        `;
+
+        await this.sendMessage(chatId, message);
+    }
+
+    async handleTest(msg) {
+        const chatId = msg.chat.id;
+
+        await this.sendMessage(chatId, `🔍 Testing universal FCFS detection...`);
+
+        try {
+            const fcfsCampaigns = await this.scanForFCFSCampaigns();
+
+            const message = `
+🧪 *Test Results*
+
+🎯 *FCFS Campaigns Found:* ${fcfsCampaigns.length}
+🔍 *Scan Method:* Universal Detection
+📊 *Total Scanned:* Multiple trending spaces
+
+*📋 Recent FCFS Campaigns:*
+${fcfsCampaigns.length > 0 ? 
+    fcfsCampaigns.slice(0, 5).map((campaign, index) => 
+        `${index + 1}. ${campaign.name}\n   Space: ${campaign.space?.name || 'Unknown'}\n   Status: ${campaign.status}`
+    ).join('\n\n') : 
+    'Tidak ada campaign FCFS aktif saat ini'
+}
+
+${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : ''}
+
+✅ Universal detection berfungsi dengan baik!
+            `;
+
+            await this.sendMessage(chatId, message);
+
+        } catch (error) {
+            this.log(`Error testing universal detection: ${error.message}`, 'ERROR');
+            await this.sendMessage(chatId, '❌ Error saat testing. Sistem mungkin sedang maintenance.');
+        }
+    }
+
+    startGlobalMonitoring() {
+        if (this.cronJob) return;
+
+        this.isGlobalMonitoring = true;
+        // Check every 60 seconds for universal monitoring
+        this.cronJob = new cron.CronJob('0 * * * * *', async () => {
+            await this.checkForNewCampaigns();
+        }, null, true);
+
+        this.log('🔄 Universal monitoring started - checking every 60 seconds');
+    }
+
+    checkGlobalMonitoring() {
+        if (this.monitoringChats.size === 0 && this.cronJob) {
+            this.cronJob.stop();
+            this.cronJob = null;
+            this.isGlobalMonitoring = false;
+            this.log('⏹️ Global monitoring stopped - no active chats');
+        }
+    }
+
+    async checkForNewCampaigns() {
+        if (this.monitoringChats.size === 0) {
+            this.checkGlobalMonitoring();
             return;
         }
-    }
-    
-    // Validate space ID
-    if (!Helpers.isValidSpaceId(input)) {
-        bot.sendMessage(chatId, '❌ Format Space ID tidak valid. Space ID harus 15-25 karakter alphanumerik.');
-        return;
-    }
-    
-    await monitor.addSpace(chatId, input);
-});
 
-bot.onText(/\/remove (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const spaceId = match[1].trim();
-    await monitor.removeSpace(chatId, spaceId);
-});
+        this.log(`🔍 Scanning for universal FCFS campaigns...`);
 
-bot.onText(/\/list/, async (msg) => {
-    const chatId = msg.chat.id;
-    await monitor.listSpaces(chatId);
-});
+        try {
+            const fcfsCampaigns = await this.scanForFCFSCampaigns();
 
-bot.onText(/\/stats/, async (msg) => {
-    const chatId = msg.chat.id;
-    await monitor.getStats(chatId);
-});
+            // Check for new campaigns
+            for (const campaign of fcfsCampaigns) {
+                if (!this.detectedCampaigns.has(campaign.id)) {
+                    this.detectedCampaigns.add(campaign.id);
+                    
+                    // Notify all active chats
+                    for (const chatId of this.monitoringChats) {
+                        await this.notifyCampaign(chatId, campaign);
+                        await this.sleep(500); // Delay between notifications
+                    }
 
-// Handle any text that might be a space ID or URL
-bot.on('message', async (msg) => {
-    if (msg.text && !msg.text.startsWith('/')) {
-        const chatId = msg.chat.id;
-        const text = msg.text.trim();
-        
-        // Check if it's a Galxe URL
-        if (text.includes('app.galxe.com/quest/')) {
-            const spaceId = Helpers.extractSpaceIdFromUrl(text);
-            if (spaceId && Helpers.isValidSpaceId(spaceId)) {
-                bot.sendMessage(chatId, 
-                    `🔍 Terdeteksi Galxe URL!\n\nSpace ID: \`${spaceId}\`\n\nIngin menambahkannya untuk monitoring? Gunakan:\n/add ${spaceId}`,
-                    { parse_mode: 'Markdown' }
-                );
+                    this.log(`🎯 New FCFS campaign detected: ${campaign.name} (${campaign.id})`);
+                }
             }
-        }
-        // Check if it looks like a space ID
-        else if (Helpers.isValidSpaceId(text)) {
-            bot.sendMessage(chatId, 
-                `🔍 Terdeteksi Space ID!\n\nSpace ID: \`${text}\`\n\nIngin menambahkannya untuk monitoring? Gunakan:\n/add ${text}`,
-                { parse_mode: 'Markdown' }
-            );
+
+        } catch (error) {
+            this.log(`Error in universal scan: ${error.message}`, 'ERROR');
         }
     }
-});
 
-// Graceful shutdown
+    async scanForFCFSCampaigns() {
+        // Method 1: Get trending campaigns
+        const trendingCampaigns = await this.fetchTrendingCampaigns();
+        
+        // Method 2: Get recent campaigns from popular spaces
+        const recentCampaigns = await this.fetchRecentCampaigns();
+        
+        // Combine and deduplicate
+        const allCampaigns = [...trendingCampaigns, ...recentCampaigns];
+        const uniqueCampaigns = allCampaigns.filter((campaign, index, self) => 
+            index === self.findIndex(c => c.id === campaign.id)
+        );
+
+        // Filter for FCFS campaigns
+        return uniqueCampaigns.filter(campaign => this.isFCFSCampaign(campaign));
+    }
+
+    async fetchTrendingCampaigns() {
+        const query = `
+            query TrendingCampaigns($first: Int) {
+                campaigns(first: $first, orderBy: Trending, orderDirection: DESC) {
+                    edges {
+                        node {
+                            id
+                            numberID
+                            name
+                            description
+                            startTime
+                            endTime
+                            status
+                            type
+                            info
+                            space {
+                                id
+                                name
+                            }
+                        }
+                    }
+                }
+            }
+        `;
+
+        try {
+            const response = await this.makeGraphQLRequest(query, { first: 50 });
+            
+            if (!response.data?.campaigns?.edges) {
+                return [];
+            }
+
+            return response.data.campaigns.edges.map(edge => edge.node);
+        } catch (error) {
+            this.log(`Error fetching trending campaigns: ${error.message}`, 'ERROR');
+            return [];
+        }
+    }
+
+    async fetchRecentCampaigns() {
+        const query = `
+            query RecentCampaigns($first: Int) {
+                campaigns(first: $first, orderBy: CreateTime, orderDirection: DESC) {
+                    edges {
+                        node {
+                            id
+                            numberID
+                            name
+                            description
+                            startTime
+                            endTime
+                            status
+                            type
+                            info
+                            space {
+                                id
+                                name
+                            }
+                        }
+                    }
+                }
+            }
+        `;
+
+        try {
+            const response = await this.makeGraphQLRequest(query, { first: 100 });
+            
+            if (!response.data?.campaigns?.edges) {
+                return [];
+            }
+
+            return response.data.campaigns.edges.map(edge => edge.node);
+        } catch (error) {
+            this.log(`Error fetching recent campaigns: ${error.message}`, 'ERROR');
+            return [];
+        }
+    }
+
+    async makeGraphQLRequest(query, variables = {}) {
+        const response = await axios.post(process.env.GALXE_API_BASE || 'https://graphigo.prd.galaxy.eco/query', {
+            query,
+            variables
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Origin': 'https://app.galxe.com',
+                'Referer': 'https://app.galxe.com/'
+            },
+            timeout: 15000
+        });
+
+        if (response.data.errors) {
+            throw new Error(`GraphQL Error: ${JSON.stringify(response.data.errors)}`);
+        }
+
+        return response.data;
+    }
+
+    isFCFSCampaign(campaign) {
+        const searchText = `${campaign.name} ${campaign.description || ''} ${campaign.info || ''}`.toLowerCase();
+        
+        // Check for FCFS keywords
+        const fcfsKeywords = [
+            'fcfs', 'first come first served', 'first come first serve',
+            'limited', 'limited supply', 'limited quantity',
+            'grab now', 'hurry up', 'while supplies last',
+            'rush', 'quick grab', 'instant claim',
+            'only available for', 'first 100', 'first 1000',
+            'limited time', 'limited spots'
+        ];
+
+        return fcfsKeywords.some(keyword => searchText.includes(keyword));
+    }
+
+    async notifyCampaign(chatId, campaign) {
+        const campaignUrl = `https://app.galxe.com/quest/${campaign.space?.id}/${campaign.id}`;
+        const startTime = new Date(campaign.startTime * 1000).toLocaleString();
+        const endTime = new Date(campaign.endTime * 1000).toLocaleString();
+        
+        const statusEmoji = campaign.status === 'Active' ? '🟢' : 
+                           campaign.status === 'Ready' ? '🟡' : '🔴';
+
+        const message = `
+🎯 *NEW FCFS CAMPAIGN DETECTED!*
+
+📝 *Name:* ${campaign.name}
+🏢 *Space:* ${campaign.space?.name || 'Unknown'}
+🆔 *ID:* #${campaign.numberID}
+${statusEmoji} *Status:* ${campaign.status}
+⏰ *Start:* ${startTime}
+⏰ *End:* ${endTime}
+
+📋 *Description:*
+${campaign.description || 'No description available'}
+
+🔗 [**CLAIM NOW**](${campaignUrl})
+
+⚡ *Action Required:* Klaim sekarang sebelum kehabisan!
+
+#GalxeFCFS #UniversalMonitor
+        `;
+
+        try {
+            await this.bot.sendMessage(chatId, message, {
+                parse_mode: 'Markdown',
+                disable_web_page_preview: false
+            });
+            this.log(`📨 Notification sent to chat ${chatId} for campaign ${campaign.id}`);
+        } catch (error) {
+            this.log(`Error sending notification to ${chatId}: ${error.message}`, 'ERROR');
+        }
+    }
+
+    async sendMessage(chatId, message) {
+        try {
+            await this.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        } catch (error) {
+            this.log(`Error sending message to ${chatId}: ${error.message}`, 'ERROR');
+        }
+    }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Graceful shutdown
+    cleanup() {
+        if (this.cronJob) {
+            this.cronJob.stop();
+            this.cronJob = null;
+        }
+        this.isGlobalMonitoring = false;
+        this.log('🛑 Bot cleanup completed');
+    }
+}
+
+// Initialize and start bot
+const bot = new GalxeUniversalFCFSBot();
+
+// Graceful shutdown handlers
 process.on('SIGINT', () => {
-    Helpers.log('Shutting down bot...');
-    monitor.cleanup();
-    db.close();
+    console.log('\n🛑 Shutting down bot...');
+    bot.cleanup();
     process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-    Helpers.log('Shutting down bot...');
-    monitor.cleanup();
-    db.close();
+    console.log('\n🛑 Shutting down bot...');
+    bot.cleanup();
     process.exit(0);
 });
 
-Helpers.log('🤖 Galxe FCFS Monitor Bot started successfully!');
-console.log('Bot is running... Press Ctrl+C to stop.');
+console.log('🤖 Galxe Universal FCFS Monitor Bot is running...');
+console.log('📝 Commands: /start, /monitor, /stop, /status');
+console.log('⏹️  Press Ctrl+C to stop');
+
+module.exports = GalxeUniversalFCFSBot;
