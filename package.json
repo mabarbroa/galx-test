@@ -1,1 +1,36 @@
-
+{
+  "name": "galxe-fcfs-telegram-bot",
+  "version": "1.0.0",
+  "description": "Bot Telegram untuk monitoring FCFS rewards di Galxe",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "galxe",
+    "fcfs",
+    "crypto",
+    "monitoring"
+  ],
+  "author": "Hitam",
+  "license": "MIT",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12",
+    "cron": "^3.1.6",
+    "dotenv": "^16.3.1",
+    "sqlite3": "^5.1.6",
+    "moment": "^2.29.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
