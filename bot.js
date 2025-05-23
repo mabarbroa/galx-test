@@ -10,6 +10,9 @@ class GalxeUniversalFCFSBot {
         this.detectedCampaigns = new Set(); // Store campaign IDs to avoid duplicates
         this.cronJob = null;
         this.isGlobalMonitoring = false;
+        this.lastSuccessfulScan = null;
+        this.consecutiveErrors = 0;
+        this.debugMode = process.env.DEBUG === 'true';
         
         this.setupHandlers();
         this.log('🤖 Galxe Universal FCFS Monitor Bot initialized');
@@ -37,6 +40,7 @@ class GalxeUniversalFCFSBot {
         this.bot.onText(/\/stop/, (msg) => this.handleStop(msg));
         this.bot.onText(/\/status/, (msg) => this.handleStatus(msg));
         this.bot.onText(/\/test/, (msg) => this.handleTest(msg));
+        this.bot.onText(/\/health/, (msg) => this.handleHealth(msg));
     }
 
     async handleStart(msg) {
@@ -52,12 +56,14 @@ Bot ini akan memantau SEMUA campaign Galxe yang mengandung kata "FCFS" dari berb
 /stop - Stop monitoring
 /status - Cek status monitoring
 /test - Test deteksi campaign FCFS
+/health - Cek kesehatan API
 /help - Bantuan lengkap
 
 *🎯 Fitur Utama:*
 ✅ Monitor SEMUA space Galxe otomatis
 ✅ Deteksi campaign dengan kata "FCFS"
 ✅ Notifikasi real-time setiap 60 detik
+✅ Fallback system jika API down
 ✅ Tidak perlu tambah space ID manual
 
 *💡 Cara Pakai:*
@@ -83,6 +89,7 @@ Siap untuk memulai monitoring universal?
 ✅ Monitoring real-time setiap 60 detik
 ✅ Notifikasi instant dengan link langsung
 ✅ Scan otomatis trending/popular spaces
+✅ Multiple fallback systems
 
 *📋 Commands:*
 \`/start\` - Mulai bot
@@ -90,6 +97,7 @@ Siap untuk memulai monitoring universal?
 \`/stop\` - Stop monitoring
 \`/status\` - Lihat status monitoring
 \`/test\` - Test deteksi campaign FCFS
+\`/health\` - Cek kesehatan API
 \`/help\` - Bantuan ini
 
 *🔍 Cara Kerja Bot:*
@@ -191,7 +199,8 @@ Check Interval: 60 seconds
 
 *📈 Performance:*
 Detected Campaigns: ${this.detectedCampaigns.size}
-Last Check: ${new Date().toLocaleString()}
+Last Successful Scan: ${this.lastSuccessfulScan ? new Date(this.lastSuccessfulScan).toLocaleString() : 'Never'}
+Consecutive Errors: ${this.consecutiveErrors}
 Uptime: ${Math.floor(process.uptime() / 60)} minutes
 
 *🎯 Detection Keywords:*
@@ -215,8 +224,8 @@ ${isActive ? '✅ Bot sedang memantau campaign universal' : '💡 Gunakan /monit
 🧪 *Test Results*
 
 🎯 *FCFS Campaigns Found:* ${fcfsCampaigns.length}
-🔍 *Scan Method:* Universal Detection
-📊 *Total Scanned:* Multiple trending spaces
+🔍 *Scan Method:* Universal Detection with Fallbacks
+📊 *Total Scanned:* Multiple sources
 
 *📋 Recent FCFS Campaigns:*
 ${fcfsCampaigns.length > 0 ? 
@@ -235,8 +244,86 @@ ${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : '
 
         } catch (error) {
             this.log(`Error testing universal detection: ${error.message}`, 'ERROR');
-            await this.sendMessage(chatId, '❌ Error saat testing. Sistem mungkin sedang maintenance.');
+            await this.sendMessage(chatId, `❌ Error saat testing: ${error.message}\n\nSilakan cek /health untuk status API`);
         }
+    }
+
+    async handleHealth(msg) {
+        const chatId = msg.chat.id;
+        
+        await this.sendMessage(chatId, '🏥 Checking API health...');
+        
+        const healthCheck = await this.checkAPIHealth();
+        
+        const message = `
+🏥 *Bot Health Check*
+
+*🔍 API Status:*
+GraphQL Trending: ${healthCheck.trending ? '✅ Working' : '❌ Failed'}
+GraphQL Recent: ${healthCheck.recent ? '✅ Working' : '❌ Failed'}
+REST Fallback: ${healthCheck.rest ? '✅ Working' : '❌ Failed'}
+Web Scraping: ${healthCheck.scraping ? '✅ Working' : '❌ Failed'}
+
+*📊 Overall Status:*
+${healthCheck.anyWorking ? '🟢 Bot functional' : '🔴 All APIs down'}
+
+*🕐 Timestamps:*
+Last Successful Scan: ${this.lastSuccessfulScan ? new Date(this.lastSuccessfulScan).toLocaleString() : 'Never'}
+Current Time: ${new Date().toLocaleString()}
+
+*💡 Recommendations:*
+${healthCheck.anyWorking ? 
+    'Bot berfungsi normal. Monitoring dapat dilanjutkan.' : 
+    '⚠️ Semua API bermasalah. Silakan coba lagi nanti atau restart bot.'}
+        `;
+        
+        await this.sendMessage(chatId, message);
+    }
+
+    async checkAPIHealth() {
+        const health = {
+            trending: false,
+            recent: false,
+            rest: false,
+            scraping: false,
+            anyWorking: false
+        };
+
+        // Test GraphQL Trending
+        try {
+            const trending = await this.fetchTrendingCampaigns();
+            health.trending = trending.length > 0;
+        } catch (error) {
+            this.log(`Health check - Trending failed: ${error.message}`, 'DEBUG');
+        }
+
+        // Test GraphQL Recent
+        try {
+            const recent = await this.fetchRecentCampaigns();
+            health.recent = recent.length > 0;
+        } catch (error) {
+            this.log(`Health check - Recent failed: ${error.message}`, 'DEBUG');
+        }
+
+        // Test REST fallback
+        try {
+            const rest = await this.fetchCampaignsViaREST();
+            health.rest = rest.length > 0;
+        } catch (error) {
+            this.log(`Health check - REST failed: ${error.message}`, 'DEBUG');
+        }
+
+        // Test web scraping
+        try {
+            const scraped = await this.scrapeCampaignsFromWeb();
+            health.scraping = scraped.length > 0;
+        } catch (error) {
+            this.log(`Health check - Scraping failed: ${error.message}`, 'DEBUG');
+        }
+
+        health.anyWorking = health.trending || health.recent || health.rest || health.scraping;
+        
+        return health;
     }
 
     startGlobalMonitoring() {
@@ -266,10 +353,28 @@ ${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : '
             return;
         }
 
-        this.log(`🔍 Scanning for universal FCFS campaigns...`);
-
+        this.log(`🔍 Starting universal FCFS scan...`);
+        const startTime = Date.now();
+        
         try {
             const fcfsCampaigns = await this.scanForFCFSCampaigns();
+            const scanDuration = Date.now() - startTime;
+            
+            if (fcfsCampaigns.length === 0) {
+                this.log(`⚠️ No FCFS campaigns found (scan took ${scanDuration}ms)`);
+                
+                // Send status update to chats if no data for too long
+                if (this.lastSuccessfulScan && (Date.now() - this.lastSuccessfulScan > 300000)) { // 5 minutes
+                    for (const chatId of this.monitoringChats) {
+                        await this.sendMessage(chatId, `⚠️ *Monitor Status Warning*\n\nTidak ada campaign FCFS ditemukan dalam 5 menit terakhir. Kemungkinan:\n• API Galxe sedang down\n• Tidak ada campaign FCFS aktif\n• Network issues\n\nBot masih berjalan dan akan terus mencoba...\n\nGunakan /health untuk cek status API.`);
+                    }
+                }
+                return;
+            }
+            
+            this.lastSuccessfulScan = Date.now();
+            this.consecutiveErrors = 0; // Reset error counter on success
+            this.log(`✅ Scan completed: ${fcfsCampaigns.length} FCFS campaigns (${scanDuration}ms)`);
 
             // Check for new campaigns
             for (const campaign of fcfsCampaigns) {
@@ -279,7 +384,7 @@ ${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : '
                     // Notify all active chats
                     for (const chatId of this.monitoringChats) {
                         await this.notifyCampaign(chatId, campaign);
-                        await this.sleep(500); // Delay between notifications
+                        await this.sleep(500);
                     }
 
                     this.log(`🎯 New FCFS campaign detected: ${campaign.name} (${campaign.id})`);
@@ -287,31 +392,149 @@ ${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : '
             }
 
         } catch (error) {
-            this.log(`Error in universal scan: ${error.message}`, 'ERROR');
+            this.consecutiveErrors++;
+            this.log(`❌ Universal scan failed (${this.consecutiveErrors}x): ${error.message}`, 'ERROR');
+            
+            // Notify users about persistent errors
+            if (this.consecutiveErrors === 5) {
+                for (const chatId of this.monitoringChats) {
+                    await this.sendMessage(chatId, `🚨 *Monitoring Alert*\n\nBot mengalami 5x error berturut-turut:\n\`${error.message}\`\n\nKemungkinan penyebab:\n• API Galxe maintenance\n• Network issues\n• Rate limiting\n\nBot akan terus mencoba. Gunakan /health untuk detail.`);
+                }
+            }
         }
     }
 
     async scanForFCFSCampaigns() {
-        // Method 1: Get trending campaigns
-        const trendingCampaigns = await this.fetchTrendingCampaigns();
+        let allCampaigns = [];
+        let successfulMethods = [];
         
-        // Method 2: Get recent campaigns from popular spaces
-        const recentCampaigns = await this.fetchRecentCampaigns();
+        // Method 1: GraphQL Trending
+        try {
+            const trendingCampaigns = await this.fetchTrendingCampaigns();
+            if (trendingCampaigns.length > 0) {
+                allCampaigns.push(...trendingCampaigns);
+                successfulMethods.push('GraphQL Trending');
+                this.log(`✅ GraphQL Trending: ${trendingCampaigns.length} campaigns`);
+            }
+        } catch (error) {
+            this.log(`❌ GraphQL Trending failed: ${error.message}`, 'WARN');
+        }
         
-        // Combine and deduplicate
-        const allCampaigns = [...trendingCampaigns, ...recentCampaigns];
+        // Method 2: GraphQL Recent
+        try {
+            const recentCampaigns = await this.fetchRecentCampaigns();
+            if (recentCampaigns.length > 0) {
+                allCampaigns.push(...recentCampaigns);
+                successfulMethods.push('GraphQL Recent');
+                this.log(`✅ GraphQL Recent: ${recentCampaigns.length} campaigns`);
+            }
+        } catch (error) {
+            this.log(`❌ GraphQL Recent failed: ${error.message}`, 'WARN');
+        }
+        
+        // Method 3: REST API Fallback (jika GraphQL gagal total)
+        if (allCampaigns.length === 0) {
+            this.log('🔄 All GraphQL methods failed, trying REST API fallback...', 'WARN');
+            try {
+                const restCampaigns = await this.fetchCampaignsViaREST();
+                if (restCampaigns.length > 0) {
+                    allCampaigns.push(...restCampaigns);
+                    successfulMethods.push('REST API');
+                    this.log(`✅ REST API Fallback: ${restCampaigns.length} campaigns`);
+                }
+            } catch (error) {
+                this.log(`❌ REST API also failed: ${error.message}`, 'ERROR');
+            }
+        }
+        
+        // Method 4: Web Scraping Fallback (last resort)
+        if (allCampaigns.length === 0) {
+            this.log('🔄 All API methods failed, trying web scraping...', 'WARN');
+            try {
+                const scrapedCampaigns = await this.scrapeCampaignsFromWeb();
+                if (scrapedCampaigns.length > 0) {
+                    allCampaigns.push(...scrapedCampaigns);
+                    successfulMethods.push('Web Scraping');
+                    this.log(`✅ Web Scraping: ${scrapedCampaigns.length} campaigns`);
+                }
+            } catch (error) {
+                this.log(`❌ Web scraping also failed: ${error.message}`, 'ERROR');
+            }
+        }
+        
+        // Log success status
+        this.log(`📊 Data sources used: ${successfulMethods.join(', ') || 'None'}`);
+        
+        if (allCampaigns.length === 0) {
+            this.log('⚠️ No campaigns retrieved from any source!', 'ERROR');
+            return [];
+        }
+        
+        // Deduplicate campaigns
         const uniqueCampaigns = allCampaigns.filter((campaign, index, self) => 
             index === self.findIndex(c => c.id === campaign.id)
         );
 
         // Filter for FCFS campaigns
-        return uniqueCampaigns.filter(campaign => this.isFCFSCampaign(campaign));
+        const fcfsCampaigns = uniqueCampaigns.filter(campaign => this.isFCFSCampaign(campaign));
+        this.log(`🎯 FCFS campaigns found: ${fcfsCampaigns.length}/${uniqueCampaigns.length}`);
+        
+        return fcfsCampaigns;
     }
 
     async fetchTrendingCampaigns() {
         const query = `
-            query TrendingCampaigns($first: Int) {
-                campaigns(first: $first, orderBy: Trending, orderDirection: DESC) {
+            query TrendingCampaigns($first: Int!) {
+                campaigns(
+                    input: {
+                        first: $first
+                        listType: Trending
+                    }
+                ) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    list {
+                        id
+                        numberID
+                        name
+                        description
+                        startTime
+                        endTime
+                        status
+                        type
+                        info
+                        space {
+                            id
+                            name
+                        }
+                    }
+                }
+            }
+        `;
+
+        try {
+            const response = await this.makeGraphQLRequest(query, { first: 50 });
+            
+            if (!response.data?.campaigns?.list) {
+                this.log('No campaigns data in trending response', 'WARN');
+                return [];
+            }
+
+            return response.data.campaigns.list;
+        } catch (error) {
+            this.log(`Error fetching trending campaigns: ${error.message}`, 'ERROR');
+            
+            // Try alternative query structure
+            return await this.fetchTrendingCampaignsAlternative();
+        }
+    }
+
+    async fetchTrendingCampaignsAlternative() {
+        const query = `
+            query GetCampaigns($first: Int!) {
+                campaigns(first: $first) {
                     edges {
                         node {
                             id
@@ -342,30 +565,37 @@ ${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : '
 
             return response.data.campaigns.edges.map(edge => edge.node);
         } catch (error) {
-            this.log(`Error fetching trending campaigns: ${error.message}`, 'ERROR');
-            return [];
+            this.log(`Error with alternative trending query: ${error.message}`, 'ERROR');
+            throw error;
         }
     }
 
     async fetchRecentCampaigns() {
         const query = `
-            query RecentCampaigns($first: Int) {
-                campaigns(first: $first, orderBy: CreateTime, orderDirection: DESC) {
-                    edges {
-                        node {
+            query RecentCampaigns($first: Int!) {
+                campaigns(
+                    input: {
+                        first: $first
+                        listType: Latest
+                    }
+                ) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    list {
+                        id
+                        numberID
+                        name
+                        description
+                        startTime
+                        endTime
+                        status
+                        type
+                        info
+                        space {
                             id
-                            numberID
                             name
-                            description
-                            startTime
-                            endTime
-                            status
-                            type
-                            info
-                            space {
-                                id
-                                name
-                            }
                         }
                     }
                 }
@@ -375,37 +605,148 @@ ${fcfsCampaigns.length > 5 ? `\n... dan ${fcfsCampaigns.length - 5} lainnya` : '
         try {
             const response = await this.makeGraphQLRequest(query, { first: 100 });
             
-            if (!response.data?.campaigns?.edges) {
+            if (!response.data?.campaigns?.list) {
+                this.log('No campaigns data in recent response', 'WARN');
                 return [];
             }
 
-            return response.data.campaigns.edges.map(edge => edge.node);
+            return response.data.campaigns.list;
         } catch (error) {
             this.log(`Error fetching recent campaigns: ${error.message}`, 'ERROR');
+            throw error;
+        }
+    }
+
+    async fetchCampaignsViaREST() {
+        try {
+            // Try different REST endpoints
+            const endpoints = [
+                'https://graphigo.prd.galaxy.eco/query',
+                'https://api.galxe.com/api/campaigns',
+                'https://app.galxe.com/api/campaigns'
+            ];
+            
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await axios.get(endpoint, {
+                        params: {
+                            limit: 50,
+                            sort: 'trending'
+                        },
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept': 'application/json'
+                        },
+                        timeout: 10000
+                    });
+                    
+                    if (response.data && Array.isArray(response.data)) {
+                        return response.data;
+                    }
+                    
+                    if (response.data.data && Array.isArray(response.data.data)) {
+                        return response.data.data;
+                    }
+                    
+                } catch (endpointError) {
+                    this.log(`REST endpoint ${endpoint} failed: ${endpointError.message}`, 'DEBUG');
+                    continue;
+                }
+            }
+            
+            return [];
+            
+        } catch (error) {
+            this.log(`REST API fallback error: ${error.message}`, 'ERROR');
+            return [];
+        }
+    }
+
+    async scrapeCampaignsFromWeb() {
+        try {
+            const response = await axios.get('https://app.galxe.com', {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                },
+                timeout: 15000
+            });
+            
+            // Simple regex to extract campaign data from HTML
+            const campaignMatches = response.data.match(/campaign[s]?\s*:\s*(\[.*?\])/gi);
+            
+            if (campaignMatches && campaignMatches.length > 0) {
+                try {
+                    const campaignData = JSON.parse(campaignMatches[0].split(':')[1]);
+                    return Array.isArray(campaignData) ? campaignData : [];
+                } catch (parseError) {
+                    this.log(`Failed to parse scraped data: ${parseError.message}`, 'WARN');
+                }
+            }
+            
+            return [];
+            
+        } catch (error) {
+            this.log(`Web scraping error: ${error.message}`, 'ERROR');
             return [];
         }
     }
 
     async makeGraphQLRequest(query, variables = {}) {
-        const response = await axios.post(process.env.GALXE_API_BASE || 'https://graphigo.prd.galaxy.eco/query', {
-            query,
-            variables
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Origin': 'https://app.galxe.com',
-                'Referer': 'https://app.galxe.com/'
-            },
-            timeout: 15000
-        });
+        try {
+            const response = await axios.post(
+                process.env.GALXE_API_BASE || 'https://graphigo.prd.galaxy.eco/query', 
+                {
+                    query,
+                    variables
+                }, 
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'application/json',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Origin': 'https://app.galxe.com',
+                        'Referer': 'https://app.galxe.com/',
+                        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                        'Sec-Ch-Ua-Mobile': '?0',
+                        'Sec-Ch-Ua-Platform': '"Windows"',
+                        'Sec-Fetch-Dest': 'empty',
+                        'Sec-Fetch-Mode': 'cors',
+                        'Sec-Fetch-Site': 'cross-site'
+                    },
+                    timeout: 15000
+                }
+            );
 
-        if (response.data.errors) {
-            throw new Error(`GraphQL Error: ${JSON.stringify(response.data.errors)}`);
+            // Debug logging
+            if (this.debugMode) {
+                this.log(`GraphQL Query: ${query.substring(0, 100)}...`, 'DEBUG');
+                this.log(`GraphQL Variables: ${JSON.stringify(variables)}`, 'DEBUG');
+                this.log(`GraphQL Response Status: ${response.status}`, 'DEBUG');
+            }
+            
+            if (response.data.errors) {
+                this.log(`GraphQL Errors: ${JSON.stringify(response.data.errors, null, 2)}`, 'ERROR');
+                throw new Error(`GraphQL Error: ${JSON.stringify(response.data.errors)}`);
+            }
+
+            return response.data;
+            
+        } catch (error) {
+            if (error.response) {
+                this.log(`HTTP Error ${error.response.status}: ${JSON.stringify(error.response.data)}`, 'ERROR');
+                
+                // Special handling for 422 errors
+                if (error.response.status === 422) {
+                    throw new Error(`API Validation Error (422): ${JSON.stringify(error.response.data)}`);
+                }
+            } else if (error.request) {
+                this.log(`Network Error: ${error.message}`, 'ERROR');
+            } else {
+                this.log(`Request Error: ${error.message}`, 'ERROR');
+            }
+            throw error;
         }
-
-        return response.data;
     }
 
     isFCFSCampaign(campaign) {
